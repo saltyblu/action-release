@@ -1,75 +1,62 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
-const {
-  parseVersion,
-  stringifyVersion,
-  determineRange,
-  detectCommitBump,
-  computeNextVersion,
-  normalizeMarkdownBody,
-  replaceMarkedLine,
-  getBooleanInput,
-} = require("../index.js");
+const actionYmlPath = path.resolve(__dirname, "..", "action.yml");
 
-test("parseVersion parses semver", () => {
-  assert.deepEqual(parseVersion("1.2.3"), { major: 1, minor: 2, patch: 3 });
-  assert.equal(parseVersion("v1.2.3"), null);
+function readActionYml() {
+  return fs.readFileSync(actionYmlPath, "utf8");
+}
+
+test("action.yml uses composite runtime", () => {
+  const yaml = readActionYml();
+  assert.match(yaml, /runs:\n\s+using: composite/);
 });
 
-test("stringifyVersion formats semver", () => {
-  assert.equal(stringifyVersion({ major: 3, minor: 1, patch: 4 }), "3.1.4");
+test("action.yml wires version-next action", () => {
+  const yaml = readActionYml();
+  assert.match(yaml, /id: version-next/);
+  assert.match(yaml, /uses: saltyblu\/action-release-version-next@main/);
 });
 
-test("determineRange prefers pull_request payload", () => {
-  const payload = {
-    pull_request: {
-      base: { sha: "aaa" },
-      head: { sha: "bbb" },
-    },
-  };
-
-  assert.deepEqual(determineRange("pull_request", payload, null), {
-    range: "aaa..bbb",
-    mode: "pull_request",
-  });
+test("action.yml wires changelog and version-bump actions", () => {
+  const yaml = readActionYml();
+  assert.match(yaml, /id: changelog/);
+  assert.match(yaml, /uses: saltyblu\/action-release-changelog@main/);
+  assert.match(yaml, /id: version-bump/);
+  assert.match(yaml, /uses: saltyblu\/action-release-version-bump@main/);
 });
 
-test("detectCommitBump covers conventional commits", () => {
-  assert.equal(detectCommitBump({ subject: "feat: add", body: "" }), "minor");
-  assert.equal(detectCommitBump({ subject: "fix: bug", body: "" }), "patch");
-  assert.equal(detectCommitBump({ subject: "feat!: break", body: "" }), "major");
+test("action.yml wires release-create action", () => {
+  const yaml = readActionYml();
+  assert.match(yaml, /id: release-create/);
+  assert.match(yaml, /uses: saltyblu\/action-release-create@main/);
 });
 
-test("computeNextVersion increments correctly", () => {
-  assert.deepEqual(computeNextVersion({ major: 1, minor: 2, patch: 3 }, "patch"), { major: 1, minor: 2, patch: 4 });
-  assert.deepEqual(computeNextVersion({ major: 1, minor: 2, patch: 3 }, "minor"), { major: 1, minor: 3, patch: 0 });
-  assert.deepEqual(computeNextVersion({ major: 1, minor: 2, patch: 3 }, "major"), { major: 2, minor: 0, patch: 0 });
+test("action.yml contains auto-commit controls", () => {
+  const yaml = readActionYml();
+  assert.match(yaml, /auto-commit:/);
+  assert.match(yaml, /commit-message:/);
+  assert.match(yaml, /commit-skip-ci:/);
 });
 
-test("normalizeMarkdownBody strips unreleased heading", () => {
-  const text = "## Unreleased\n\n- feat: entry\n";
-  assert.equal(normalizeMarkdownBody(text), "- feat: entry");
+test("auto-commit step is conditional for tag and dry-run", () => {
+  const yaml = readActionYml();
+  assert.match(yaml, /id: auto-commit/);
+  assert.match(yaml, /inputs\.run-tag == 'true'/);
+  assert.match(yaml, /inputs\.auto-commit == 'true'/);
+  assert.match(yaml, /inputs\.dry-run != 'true'/);
 });
 
-test("replaceMarkedLine swaps the marked version", () => {
-  const line = "image: app:v0.1.0 # update-automation:version";
-  assert.equal(
-    replaceMarkedLine(line, "update-automation:version", "v0.2.0"),
-    "image: app:v0.2.0 # update-automation:version"
-  );
+test("auto-commit appends skip ci when enabled", () => {
+  const yaml = readActionYml();
+  assert.match(yaml, /\[skip ci\]/);
+  assert.match(yaml, /if \[ "\$INPUT_COMMIT_SKIP_CI" = "true" \]/);
 });
 
-test("getBooleanInput interprets true/false text", () => {
-  const previous = process.env.INPUT_RUN_TAG;
-  process.env.INPUT_RUN_TAG = "true";
-  assert.equal(getBooleanInput("run-tag", false), true);
-  process.env.INPUT_RUN_TAG = "false";
-  assert.equal(getBooleanInput("run-tag", true), false);
-
-  if (typeof previous === "undefined") {
-    delete process.env.INPUT_RUN_TAG;
-  } else {
-    process.env.INPUT_RUN_TAG = previous;
-  }
+test("outputs are mapped from resolve and release-create steps", () => {
+  const yaml = readActionYml();
+  assert.match(yaml, /next-version:\n\s+description:[\s\S]*?value: \$\{\{ steps\.resolve-version\.outputs\.next-version \}\}/);
+  assert.match(yaml, /tag:\n\s+description:[\s\S]*?value: \$\{\{ steps\.release-create\.outputs\.tag \}\}/);
 });

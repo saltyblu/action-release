@@ -1,13 +1,13 @@
 .PHONY: test coverage check
 
 test:
-	node --test
+	node --test tests/index.test.js
 
 coverage:
-	node --test \
+	node --test tests/index.test.js \
 		--experimental-test-coverage \
-		--test-coverage-exclude='tests/**' \
+		--test-coverage-include='tests/**' \
 		--test-coverage-branches=90
 
 check:
-	node --check index.js
+	node --check tests/index.test.js
