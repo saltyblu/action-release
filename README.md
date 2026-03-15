@@ -39,6 +39,7 @@ Tag/release inputs:
 - `github-token`
 - `release-token` (falls back to `github-token`)
 - `release-body` (optional override)
+- `update-major-tag` (default: `false`, updates major tag like `v1` together with full tag)
 
 Changelog and bump inputs:
 

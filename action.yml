@@ -78,6 +78,10 @@ inputs:
     description: Optional release body override. Defaults to changelog output if available.
     required: false
     default: ""
+  update-major-tag:
+    description: If true, also move <tag-prefix><major> to the release commit
+    required: false
+    default: "false"
   changelog-dir:
     description: Changelog fragment directory for wrapper changelog phase
     required: false
@@ -118,6 +122,9 @@ outputs:
   release-url:
     description: GitHub release URL
     value: ${{ steps.release-create.outputs.release-url }}
+  major-tag:
+    description: Updated major tag from release-create (or empty)
+    value: ${{ steps.release-create.outputs.major-tag }}
 
 runs:
   using: composite
@@ -214,6 +221,47 @@ runs:
           echo "__RELEASE_BODY__"
         } >> "$GITHUB_OUTPUT"
 
+    - name: Dry-run summary
+      if: ${{ inputs.dry-run == 'true' }}
+      shell: bash
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        NEXT_VERSION: ${{ steps.resolve-version.outputs.next-version }}
+        NEXT_TAG: ${{ steps.resolve-version.outputs.next-tag }}
+        MAJOR_TAG: ${{ steps.release-create.outputs.major-tag }}
+        BUMP_TYPE: ${{ steps.resolve-version.outputs.bump-type }}
+        COMMIT_COUNT: ${{ steps.resolve-version.outputs.commit-count }}
+        CHANGELOG_PATH: ${{ steps.changelog.outputs.changelog-path }}
+        UPDATED_FILES: ${{ steps.version-bump.outputs.updated-files }}
+      run: |
+        set -euo pipefail
+
+        {
+          echo "## Release Plan"
+          echo "- Mode: Dry Run"
+          echo "- Next Version: ${NEXT_VERSION}"
+          echo "- Next Tag: ${NEXT_TAG}"
+          echo "- Major Tag: ${MAJOR_TAG:-<disabled>}"
+          echo "- Bump Type: ${BUMP_TYPE}"
+          echo "- Commit Count: ${COMMIT_COUNT}"
+          echo ""
+          echo "### Planned File Updates"
+          if [ -n "$CHANGELOG_PATH" ]; then
+            echo "- ${INPUT_WORKING_DIRECTORY}/${CHANGELOG_PATH}"
+          else
+            echo "- changelog: no changelog update output"
+          fi
+          if [ -n "$UPDATED_FILES" ] && [ "$UPDATED_FILES" != "[]" ]; then
+            echo "- version-bump files: $UPDATED_FILES"
+          else
+            echo "- version-bump files: none"
+          fi
+          echo "- additional generated files (if enabled): CHANGELOG.md, unreleased.md"
+          echo ""
+          echo "### Theoretical Git Diff"
+          echo "In dry-run mode no files are written. The list above reflects planned changes."
+        } >> "$GITHUB_STEP_SUMMARY"
+
     - name: Auto commit release changes
       id: auto-commit
       if: ${{ inputs.run-tag == 'true' && inputs.auto-commit == 'true' && inputs.dry-run != 'true' }}
@@ -276,3 +324,4 @@ runs:
         github-token: ${{ inputs.github-token }}
         release-token: ${{ inputs.release-token }}
         dry-run: ${{ inputs.dry-run }}
+        update-major-tag: ${{ inputs.update-major-tag }}

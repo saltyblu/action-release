@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run release orchestration
+        id: release
+        uses: ./
+        with:
+          working-directory: .
+          github-token: ${{ github.token }}
+          release-token: ${{ github.token }}
+          dry-run: ${{ github.event_name == 'pull_request' }}
+          update-major-tag: "true"
