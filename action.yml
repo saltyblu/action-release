@@ -1,0 +1,278 @@
+name: action-release
+description: Composite action that orchestrates version-next, changelog, version-bump and release-create.
+
+inputs:
+  version:
+    description: Optional fixed semantic version. If empty and run-next-version=true, version is computed.
+    required: false
+    default: ""
+  tag-prefix:
+    description: Tag prefix, e.g. v
+    required: false
+    default: "v"
+  working-directory:
+    description: Directory where release operations should run
+    required: false
+    default: "."
+  dry-run:
+    description: If true, computes outputs without writing/pushing/tagging
+    required: false
+    default: "false"
+  run-next-version:
+    description: Execute next-version detection phase
+    required: false
+    default: "true"
+  run-changelog:
+    description: Execute changelog update phase
+    required: false
+    default: "true"
+  run-bump-version:
+    description: Execute marker-based bump phase
+    required: false
+    default: "true"
+  run-tag:
+    description: Execute commit/tag/release phase
+    required: false
+    default: "true"
+  auto-commit:
+    description: If true, commit and push generated files before creating tag/release
+    required: false
+    default: "true"
+  commit-message:
+    description: Base release commit message. The final version tag is appended automatically.
+    required: false
+    default: "chore(release): prepare"
+  commit-skip-ci:
+    description: If true, appends [skip ci] to the auto-generated release commit message
+    required: false
+    default: "true"
+  commit-user-name:
+    description: Git author name used for auto-commit
+    required: false
+    default: "github-actions[bot]"
+  commit-user-email:
+    description: Git author email used for auto-commit
+    required: false
+    default: "41898282+github-actions[bot]@users.noreply.github.com"
+  marker:
+    description: Marker token for bump-version phase
+    required: false
+    default: "update-automation:version"
+  repository:
+    description: Repository in owner/name format. Defaults to GITHUB_REPOSITORY
+    required: false
+    default: ""
+  target-branch:
+    description: Branch that receives commit/tag operations
+    required: false
+    default: "main"
+  github-token:
+    description: Token used for push and release creation
+    required: false
+    default: ""
+  release-token:
+    description: Optional dedicated token for release creation
+    required: false
+    default: ""
+  release-body:
+    description: Optional release body override. Defaults to changelog output if available.
+    required: false
+    default: ""
+  changelog-dir:
+    description: Changelog fragment directory for wrapper changelog phase
+    required: false
+    default: ".changelog"
+  unreleased-file:
+    description: Unreleased notes file for wrapper changelog phase
+    required: false
+    default: "unreleased.md"
+
+outputs:
+  next-version:
+    description: Calculated or provided semantic version
+    value: ${{ steps.resolve-version.outputs.next-version }}
+  next-tag:
+    description: Calculated or provided tag
+    value: ${{ steps.resolve-version.outputs.next-tag }}
+  bump-type:
+    description: Detected bump type when run-next-version is enabled
+    value: ${{ steps.resolve-version.outputs.bump-type }}
+  commit-count:
+    description: Number of commits considered for version detection
+    value: ${{ steps.resolve-version.outputs.commit-count }}
+  changelog-path:
+    description: Path to generated versioned changelog fragment
+    value: ${{ steps.changelog.outputs.changelog-path }}
+  updated-files:
+    description: JSON array of files changed by version-bump phase
+    value: ${{ steps.version-bump.outputs.updated-files }}
+  tag:
+    description: Created tag
+    value: ${{ steps.release-create.outputs.tag }}
+  target-sha:
+    description: Tagged commit SHA
+    value: ${{ steps.release-create.outputs.target-sha }}
+  release-id:
+    description: GitHub release id
+    value: ${{ steps.release-create.outputs.release-id }}
+  release-url:
+    description: GitHub release URL
+    value: ${{ steps.release-create.outputs.release-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute next version
+      id: version-next
+      if: ${{ inputs.run-next-version == 'true' }}
+      uses: saltyblu/action-release-version-next@main
+      with:
+        tag-prefix: ${{ inputs.tag-prefix }}
+        working-directory: ${{ inputs.working-directory }}
+
+    - name: Resolve effective version and tag
+      id: resolve-version
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_TAG_PREFIX: ${{ inputs.tag-prefix }}
+        NEXT_OUTPUT_VERSION: ${{ steps.version-next.outputs.next-version }}
+        NEXT_OUTPUT_BUMP_TYPE: ${{ steps.version-next.outputs.bump-type }}
+        NEXT_OUTPUT_COMMIT_COUNT: ${{ steps.version-next.outputs.commit-count }}
+      run: |
+        set -euo pipefail
+
+        version="$INPUT_VERSION"
+        if [ -z "$version" ]; then
+          version="$NEXT_OUTPUT_VERSION"
+        fi
+
+        if [ -z "$version" ]; then
+          echo "A version is required. Set input 'version' or enable run-next-version with available commits." >&2
+          exit 1
+        fi
+
+        next_tag="${INPUT_TAG_PREFIX}${version}"
+
+        bump_type="$NEXT_OUTPUT_BUMP_TYPE"
+        if [ -z "$bump_type" ]; then
+          bump_type="patch"
+        fi
+
+        commit_count="$NEXT_OUTPUT_COMMIT_COUNT"
+        if [ -z "$commit_count" ]; then
+          commit_count="0"
+        fi
+
+        {
+          echo "next-version=${version}"
+          echo "next-tag=${next_tag}"
+          echo "bump-type=${bump_type}"
+          echo "commit-count=${commit_count}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build changelog
+      id: changelog
+      if: ${{ inputs.run-changelog == 'true' }}
+      uses: saltyblu/action-release-changelog@main
+      with:
+        version: ${{ steps.resolve-version.outputs.next-version }}
+        tag-prefix: ${{ inputs.tag-prefix }}
+        working-directory: ${{ inputs.working-directory }}
+        changelog-dir: ${{ inputs.changelog-dir }}
+        unreleased-file: ${{ inputs.unreleased-file }}
+        dry-run: ${{ inputs.dry-run }}
+
+    - name: Bump marked versions
+      id: version-bump
+      if: ${{ inputs.run-bump-version == 'true' }}
+      uses: saltyblu/action-release-version-bump@main
+      with:
+        version: ${{ steps.resolve-version.outputs.next-version }}
+        tag-prefix: ${{ inputs.tag-prefix }}
+        working-directory: ${{ inputs.working-directory }}
+        marker: ${{ inputs.marker }}
+        dry-run: ${{ inputs.dry-run }}
+
+    - name: Resolve release body
+      id: release-body
+      shell: bash
+      env:
+        INPUT_RELEASE_BODY: ${{ inputs.release-body }}
+        CHANGELOG_RELEASE_BODY: ${{ steps.changelog.outputs.release-body }}
+      run: |
+        set -euo pipefail
+
+        release_body="$INPUT_RELEASE_BODY"
+        if [ -z "$release_body" ]; then
+          release_body="$CHANGELOG_RELEASE_BODY"
+        fi
+
+        {
+          echo "value<<__RELEASE_BODY__"
+          echo "$release_body"
+          echo "__RELEASE_BODY__"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Auto commit release changes
+      id: auto-commit
+      if: ${{ inputs.run-tag == 'true' && inputs.auto-commit == 'true' && inputs.dry-run != 'true' }}
+      shell: bash
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_TARGET_BRANCH: ${{ inputs.target-branch }}
+        INPUT_REPOSITORY: ${{ inputs.repository }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_COMMIT_USER_NAME: ${{ inputs.commit-user-name }}
+        INPUT_COMMIT_USER_EMAIL: ${{ inputs.commit-user-email }}
+        INPUT_COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        INPUT_COMMIT_SKIP_CI: ${{ inputs.commit-skip-ci }}
+        RESOLVED_NEXT_TAG: ${{ steps.resolve-version.outputs.next-tag }}
+      run: |
+        set -euo pipefail
+
+        wd="$INPUT_WORKING_DIRECTORY"
+        target_branch="$INPUT_TARGET_BRANCH"
+        repo="$INPUT_REPOSITORY"
+        github_token="$INPUT_GITHUB_TOKEN"
+
+        if [ -z "$repo" ]; then
+          repo="$GITHUB_REPOSITORY"
+        fi
+
+        git -C "$wd" config user.name "$INPUT_COMMIT_USER_NAME"
+        git -C "$wd" config user.email "$INPUT_COMMIT_USER_EMAIL"
+
+        git -C "$wd" add -A
+        if git -C "$wd" diff --cached --quiet; then
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        commit_message="$INPUT_COMMIT_MESSAGE $RESOLVED_NEXT_TAG"
+        if [ "$INPUT_COMMIT_SKIP_CI" = "true" ]; then
+          commit_message="$commit_message [skip ci]"
+        fi
+
+        git -C "$wd" commit -m "$commit_message"
+
+        if [ -n "$github_token" ]; then
+          git -C "$wd" remote set-url origin "https://x-access-token:${github_token}@github.com/${repo}.git"
+        fi
+        git -C "$wd" push origin "HEAD:refs/heads/${target_branch}"
+
+        echo "changed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Create tag and GitHub release
+      id: release-create
+      if: ${{ inputs.run-tag == 'true' }}
+      uses: saltyblu/action-release-create@main
+      with:
+        version: ${{ steps.resolve-version.outputs.next-version }}
+        tag-prefix: ${{ inputs.tag-prefix }}
+        release-body: ${{ steps.release-body.outputs.value }}
+        target-branch: ${{ inputs.target-branch }}
+        repository: ${{ inputs.repository }}
+        github-token: ${{ inputs.github-token }}
+        release-token: ${{ inputs.release-token }}
+        dry-run: ${{ inputs.dry-run }}
